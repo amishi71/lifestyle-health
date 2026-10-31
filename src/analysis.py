@@ -12,8 +12,13 @@ from sklearn.preprocessing import StandardScaler
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt, seaborn as sns, shap
 
+pd.set_option("display.width", 200)          # show full tables in the terminal (no "...")
+
 OUT = Path("outputs"); OUT.mkdir(exist_ok=True)
 LIFE = ["sleep_hrs", "activity_domains", "sedentary_min", "kcal", "sugar_g", "sodium_mg", "fiber_g", "fat_g"]
+# FIX: kcal had VIF > 10 (it overlaps with fat, sugar and sodium), which flipped signs in the
+# adjusted regression. It is kept for Spearman, ML and personas, but left out of the regression/VIF.
+ADJ = [c for c in LIFE if c != "kcal"]
 HEALTH = ["sbp", "dbp", "bmi", "waist_cm", "hba1c", "hdl", "tchol", "phq9"]
 MODEL_TARGETS = ["sbp", "bmi", "hba1c", "phq9"]
 df = pd.read_csv("data/processed/nhanes_clean.csv").dropna(subset=LIFE + ["age", "sex"])
@@ -34,19 +39,19 @@ sns.heatmap(cor.pivot(index="lifestyle", columns="health", values="rho")[HEALTH]
 plt.title("Spearman correlation: lifestyle vs health indicators"); plt.tight_layout()
 plt.savefig(OUT / "heatmap_spearman.png", dpi=150); plt.close()
 
-# 2) Adjusted OLS (standardised lifestyle, controlling for age and sex)
+# 2) Adjusted OLS (standardised lifestyle, controlling for age and sex) -- uses ADJ (no kcal)
 res = []
 for h in HEALTH:
-    s = df.dropna(subset=[h]); X = s[LIFE].apply(lambda c: (c - c.mean()) / c.std())
+    s = df.dropna(subset=[h]); X = s[ADJ].apply(lambda c: (c - c.mean()) / c.std())
     X[["age", "sex"]] = s[["age", "sex"]]; m = sm.OLS(s[h], sm.add_constant(X)).fit(); ci = m.conf_int()
-    for l in LIFE:
+    for l in ADJ:
         res.append((h, l, m.params[l], ci.loc[l, 0], ci.loc[l, 1], m.pvalues[l], m.rsquared))
 ols = pd.DataFrame(res, columns=["health", "lifestyle", "beta_per_SD", "ci_low", "ci_high", "p", "model_R2"])
 ols["p_fdr"] = multipletests(ols.p, method="fdr_bh")[1]
 ols.to_csv(OUT / "adjusted_regression.csv", index=False)
 
-# 3) Multicollinearity
-Xv = sm.add_constant(df[LIFE + ["age", "sex"]])
+# 3) Multicollinearity -- check the same variables used in the regression
+Xv = sm.add_constant(df[ADJ + ["age", "sex"]])
 pd.DataFrame({"feature": Xv.columns[1:], "VIF": [variance_inflation_factor(Xv.values, i) for i in range(1, Xv.shape[1])]}
              ).to_csv(OUT / "vif.csv", index=False)
 
@@ -66,10 +71,16 @@ joblib.dump({"models": models, "features": FEATS, "data": df[FEATS + MODEL_TARGE
 # 5) Lifestyle personas (k chosen by silhouette)
 Z = StandardScaler().fit_transform(df[LIFE])
 sil = {k: silhouette_score(Z, KMeans(k, n_init=10, random_state=42).fit_predict(Z)) for k in range(3, 7)}
+pd.Series(sil, name="silhouette").rename_axis("k").to_csv(OUT / "silhouette_scores.csv")
 k = max(sil, key=sil.get); df["persona"] = KMeans(k, n_init=10, random_state=42).fit_predict(Z)
-prof = df.groupby("persona")[LIFE + HEALTH].mean().round(2); prof["size"] = df.persona.value_counts().sort_index()
+# FIX: also show average age and % female per persona, to help name and explain them
+prof = df.groupby("persona")[["age", "sex"] + LIFE + HEALTH].mean().round(2)
+prof = prof.rename(columns={"sex": "pct_female"}); prof["pct_female"] = (prof["pct_female"] * 100).round(1)
+prof["size"] = df.persona.value_counts().sort_index()
 prof.to_csv(OUT / "persona_profiles.csv")
 zp = (df.groupby("persona")[LIFE].mean() - df[LIFE].mean()) / df[LIFE].std()
 plt.figure(figsize=(9, 4)); sns.heatmap(zp, annot=True, fmt=".2f", cmap="coolwarm", center=0)
 plt.title(f"Lifestyle personas (k={k}, z-scores vs population)"); plt.tight_layout(); plt.savefig(OUT / "personas.png", dpi=150)
+plt.close()
+print("Silhouette scores:", {kk: round(v, 3) for kk, v in sil.items()})
 print("Done. Best k =", k); print(pd.read_csv(OUT / "model_performance.csv"))
