@@ -6,7 +6,7 @@ def load_data():
     survey_df = pd.read_csv("Lifestyle and Health Survey (Responses) - Form Responses 1.csv")
     
     # Load processed NHANES dataset
-    nhanes_df = pd.read_csv("data/processed/nhanes_final.csv")  # Adjust path if different
+    nhanes_df = pd.read_csv("data/processed/nhanes_clean.csv")
     
     return survey_df, nhanes_df
 
@@ -16,12 +16,11 @@ def print_comparisons(survey_df, nhanes_df):
     print(f"NHANES Total Sample Size: {len(nhanes_df)}")
     print("-" * 40)
 
-    # Example: Column mappings & metric comparisons
-    # Map your survey column names to the NHANES dataset column names below:
+    # Column mappings: 'Survey Question Header': 'NHANES Feature Name'
     mapping = {
-        # 'Survey Column Name': 'NHANES_Column_Name'
-        # e.g., 'How many hours of sleep do you get?': 'sleep_hours',
-        # 'Age': 'age'
+        'Age': 'age',
+        'Sleep Hours': 'sleep_hours',
+        # Add your mapped column names here
     }
 
     for survey_col, nhanes_col in mapping.items():
